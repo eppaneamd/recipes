@@ -93,6 +93,19 @@ hardware_overrides:
       - "data"
       - "--async-scheduling"
     extra_env: {}
+  amd:
+    extra_args:
+      - "--mm-encoder-tp-mode"
+      - "data"
+      - "--async-scheduling"
+      - "--enable-chunked-prefill"
+    extra_env:
+      VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+      HIP_FORCE_DEV_KERNARG: "1"
+      VLLM_ROCM_USE_AITER: "1"
+      VLLM_ROCM_USE_AITER_MHA: "1"
+      VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT: "1"
+      SAFETENSORS_FAST_GPU: "1"
 
 strategy_overrides: {}
 
@@ -169,6 +182,31 @@ guide: |
     --tensor-parallel 4 \
     --mm-encoder-tp-mode data
   ```
+
+  ### MI300X/MI325X/MI355X (FP8, TP8)
+  ```bash
+  VLLM_WORKER_MULTIPROC_METHOD=spawn \
+  HIP_FORCE_DEV_KERNARG=1 \
+  VLLM_ROCM_USE_AITER=1 \
+  VLLM_ROCM_USE_AITER_MHA=1 \
+  VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT=1 \
+  SAFETENSORS_FAST_GPU=1 \
+  vllm serve Qwen/Qwen3-VL-235B-A22B-Instruct-FP8 \
+    --tensor-parallel-size 8 \
+    --mm-encoder-tp-mode data \
+    --enable-expert-parallel \
+    --async-scheduling \
+    --enable-chunked-prefill \
+    --limit-mm-per-prompt '{"image": 1}' \
+    --gpu-memory-utilization 0.94 \
+    --max-model-len 32768 \
+    --max-num-seqs 10240 \
+    --max-num-batched-tokens 32768 \
+    --kv-cache-dtype fp8 \
+    --compilation-config '{"mode": 3, "cudagraph_mode": "FULL_AND_PIECEWISE", "custom_ops": ["+rms_norm", "+quant_fp8"]}'
+  ```
+
+  > The above configuration runs efficiently at high concurrencies (up to 512) for context lengths up to 8k. If TPOT is not satisfactory, lower `--max-num-batched-tokens`. For longer contexts, `--max-num-seqs` and `--max-num-batched-tokens` may need retuning.
 
   ## Configuration Tips
 
