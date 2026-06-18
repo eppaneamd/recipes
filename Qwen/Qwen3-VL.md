@@ -180,7 +180,7 @@ These steps are for **MI300X / MI325X / MI355X** using the **vLLM ROCm Docker im
 
 | Variant | Hugging Face model id | Notes |
 |--------|------------------------|--------|
-| **BF16 ** | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Default MoE instruct weights in BF16 |
+| **BF16** | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Default MoE instruct weights in BF16 |
 | **FP8** | `Qwen/Qwen3-VL-235B-A22B-Instruct-FP8` | Same architecture; FP8 weights for optimal memory efficiency |
 
 **Workflow:** complete **Step 1** (container shell). Run **exactly one** of the **Step 2** launch blocks (BF16 **or** FP8). In **Step 3**, set `--model` on `vllm bench serve` to the **same** id you used in `vllm serve`.
