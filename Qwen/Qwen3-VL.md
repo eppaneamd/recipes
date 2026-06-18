@@ -175,70 +175,143 @@ For more usage examples, check out the [vLLM user guide for multimodal models](h
 
 
 ## AMD GPU Support
-Recommended approaches by hardware type are:
 
+These steps are for **MI300X / MI325X / MI355X** using the **vLLM ROCm Docker image**. Two Hugging Face checkpoints are covered:
 
-MI300X/MI325X/MI355X 
+| Variant | Hugging Face model id | Notes |
+|--------|------------------------|--------|
+| **BF16 ** | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Default MoE instruct weights in BF16 |
+| **FP8** | `Qwen/Qwen3-VL-235B-A22B-Instruct-FP8` | Same architecture; FP8 weights for optimal memory efficiency |
 
-Please follow the steps here to install and run Qwen3-VL models on AMD MI300X/MI325X/MI355X GPU.
+**Workflow:** complete **Step 1** (container shell). Run **exactly one** of the **Step 2** launch blocks (BF16 **or** FP8). In **Step 3**, set `--model` on `vllm bench serve` to the **same** id you used in `vllm serve`.
 
-### Step 1: Installing vLLM (AMD ROCm Backend: MI300X, MI325X, MI355X) 
- > Note: The vLLM wheel for ROCm requires Python 3.12, ROCm 7.0, and glibc >= 2.35. If your environment does not meet these requirements, please use the Docker-based setup as described in the [documentation](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/#pre-built-images).  
- ```bash 
- uv venv 
- source .venv/bin/activate 
- uv pip install vllm --extra-index-url https://wheels.vllm.ai/rocm/
- ```
+### Step 1: Install the vLLM ROCm Docker image
 
+Use the official image [`vllm/vllm-openai-rocm` on Docker Hub](https://hub.docker.com/r/vllm/vllm-openai-rocm). From the host, start an interactive shell in the container. **Steps 2 and 3** assume commands run **inside** that shell unless stated otherwise (for example, the benchmark client may run on the host or another machine that can reach the API).
 
+To build or customize images from source, see the [vLLM GPU installation guide](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/#pre-built-images).
+
+To access private Hugging Face assets, export `HF_TOKEN` on the host before `docker run`. If you do not need a token, remove the `--env` line.
+
+```bash
+docker run -it --rm \
+  --name vllm-openai-rocm \
+  --entrypoint bash \
+  --device /dev/dri:/dev/dri \
+  --device /dev/kfd:/dev/kfd \
+  --group-add video \
+  --ipc host \
+  --network host \
+  --security-opt apparmor=unconfined \
+  --security-opt seccomp=unconfined \
+  --shm-size 128G \
+  -v /data/huggingface/hub:/root/.cache/huggingface/hub \
+  --env "HF_TOKEN=$HF_TOKEN" \
+  vllm/vllm-openai-rocm:v0.22.0
+```
+
+Replace the image tag (`v0.22.0`) if you use a different release (for example `v0.23.0`), and adjust `--name`, the Hugging Face cache mount (`-v`), and other flags to match your environment.
 
 ### Step 2: Start the vLLM server
 
-Run the vllm online serving
+Run **one** of the following launch blocks **inside the container** from Step 1. Environment variables apply to the shell session; use `export` so they are visible to `vllm serve`.
 
-#### Inside the working dir, create a new directory named `miopen` .
-```shell
-mkdir "$(pwd)/miopen"
-```
+#### BF16 — `Qwen/Qwen3-VL-235B-A22B-Instruct`
 
-### BF16 
+Serve the **BF16** checkpoint. Change `--max-model-len`, `--limit-mm-per-prompt`, and batch settings if you need more headroom or multimodal video.
 
-
-```shell
-MIOPEN_USER_DB_PATH="$(pwd)/miopen" \
-MIOPEN_FIND_MODE=FAST \
-VLLM_ROCM_USE_AITER=1 \
-SAFETENSORS_FAST_GPU=1 \
+```bash
+export SAFETENSORS_FAST_GPU="1"
+export VLLM_WORKER_MULTIPROC_METHOD="spawn"
+export HIP_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+export VLLM_ROCM_USE_AITER="1"
+export VLLM_ROCM_USE_AITER_MHA="1"
+export VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT="1"
 vllm serve Qwen/Qwen3-VL-235B-A22B-Instruct \
---tensor-parallel 4 \
---mm-encoder-tp-mode data 
+  --tensor-parallel-size 8 \
+  --mm-encoder-tp-mode data \
+  --enable-expert-parallel \
+  --async-scheduling \
+  --gpu-memory-utilization 0.94 \
+  --max-model-len 32768 \
+  --max-num-seqs 10240 \
+  --max-num-batched-tokens 32768 \
+  --attention-backend ROCM_AITER_FA 
 ```
 
-### FP8 
+#### FP8 — `Qwen/Qwen3-VL-235B-A22B-Instruct-FP8`
 
-```shell
+Serve the **FP8** checkpoint. This example uses chunked prefill, FP8 KV cache, and ROCm-oriented compilation and attention settings.
 
-MIOPEN_USER_DB_PATH="$(pwd)/miopen" \
-MIOPEN_FIND_MODE=FAST \
-VLLM_USE_V1=1 \
-VLLM_ROCM_USE_AITER=1 \
-SAFETENSORS_FAST_GPU=1 \
+```bash
+export SAFETENSORS_FAST_GPU="1"
+export HIP_FORCE_DEV_KERNARG="1"
+export HIP_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+export VLLM_WORKER_MULTIPROC_METHOD="spawn"
+export VLLM_ROCM_USE_AITER="1"
+export VLLM_ROCM_USE_AITER_MHA="1"
+export VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT="1"
 vllm serve Qwen/Qwen3-VL-235B-A22B-Instruct-FP8 \
---tensor-parallel  4 \
---mm-encoder-tp-mode "data" 
-
+  --tensor-parallel-size 8 \
+  --mm-encoder-tp-mode data \
+  --enable-expert-parallel \
+  --async-scheduling \
+  --enable-chunked-prefill \
+  --limit-mm-per-prompt '{"image": 1}' \
+  --gpu-memory-utilization 0.94 \
+  --max-model-len 32768 \
+  --max-num-seqs 10240 \
+  --max-num-batched-tokens 32768 \
+  --kv-cache-dtype fp8 \
+  --compilation-config '{"mode": 3, "cudagraph_mode": "FULL_AND_PIECEWISE", "custom_ops": ["+rms_norm", "+quant_fp8"]}' \
+  --attention-backend ROCM_AITER_FA 
 ```
-### Step 3: Run Benchmark
-```shell
- vllm bench serve \
+
+**Tuning (FP8 launch above):** If time-per-output-token (TPOT) is too high, reduce `--max-num-batched-tokens`. For longer contexts, retune `--max-num-seqs` and `--max-num-batched-tokens`. Available options for `--attention-backend` are: `ROCM_ATTN`, `ROCM_AITER_FA`, `ROCM_AITER_UNIFIED_ATTN` & `TRITON_ATTN`. For **image-only** serving, narrow multimodal limits (for example set video to `0` in `--limit-mm-per-prompt`) to save memory.
+
+When startup finishes, the server log should show `INFO: Application startup complete.`
+
+
+### Step 3: Run benchmarks
+
+After the server is accepting traffic, run benchmarks from a **separate** terminal. Set `--model` to the **same** Hugging Face id you used in **Step 2** (`Qwen/Qwen3-VL-235B-A22B-Instruct` or `Qwen/Qwen3-VL-235B-A22B-Instruct-FP8`).
+
+The examples use `vllm bench serve` with the **`random-mm`** synthetic multimodal workload ([`RandomMultiModalDataset`](https://docs.vllm.ai/en/latest/api/vllm/benchmarks/datasets/#vllm.benchmarks.datasets.RandomMultiModalDataset)).
+
+#### BF16 server — `--model Qwen/Qwen3-VL-235B-A22B-Instruct`
+
+```bash
+vllm bench serve \
+  --backend openai-chat \
+  --endpoint /v1/chat/completions \
   --model Qwen/Qwen3-VL-235B-A22B-Instruct \
-  --dataset-name random \
-  --random-input-len 8192 \
-  --random-output-len 1024 \
-  --request-rate 10000 \
-  --num-prompts 16 \
-  --ignore-eos 
+  --num-prompts 1000 \
+  --num-warmups 10 \
+  --request-rate 20 \
+  --dataset-name random-mm \
+  --random-input-len 1024 \
+  --random-output-len 512 \
+  --random-mm-base-items-per-request 1 \
+  --random-mm-limit-mm-per-prompt '{"image": 1, "video": 0}' \
+  --random-mm-bucket-config '{(512, 512, 1): 1.0}' \
+  --ignore-eos
 ```
 
+#### FP8 server — `--model Qwen/Qwen3-VL-235B-A22B-Instruct-FP8`
 
-  
+```bash
+vllm bench serve \
+  --backend openai-chat \
+  --endpoint /v1/chat/completions \
+  --model Qwen/Qwen3-VL-235B-A22B-Instruct-FP8 \
+  --num-prompts 1000 \
+  --num-warmups 10 \
+  --request-rate 20 \
+  --dataset-name random-mm \
+  --random-input-len 1024 \
+  --random-output-len 512 \
+  --random-mm-base-items-per-request 1 \
+  --random-mm-limit-mm-per-prompt '{"image": 1, "video": 0}' \
+  --random-mm-bucket-config '{(512, 512, 1): 1.0}' \
+  --ignore-eos
+```
